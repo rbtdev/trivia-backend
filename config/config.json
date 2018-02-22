@@ -1,0 +1,23 @@
+{
+  "development": {
+    "username": "learn",
+    "password": "postgres",
+    "database": "trivia_app_db",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  },
+  "test": {
+    "username": "learn",
+    "password": "postgres",
+    "database": "trivia_app_db",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  },
+  "production": {
+    "username": "learn",
+    "password": "postgres",
+    "database": "trivia_app_db",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  }
+}
