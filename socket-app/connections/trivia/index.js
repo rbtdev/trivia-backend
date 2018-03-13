@@ -58,11 +58,13 @@ class Game {
         _this.currentQuestion.points = ['', 'easy', 'medium', 'hard'].indexOf(_this.currentQuestion.difficulty) * 5;
         let answers = shuffle([_this.currentQuestion.correct_answer].concat(_this.currentQuestion.incorrect_answers));
         console.log("sending question");
-        _this.room.emit('question', {
-          question: _this.currentQuestion.question,
-          category: _this.currentQuestion.category,
-          points: _this.currentQuestion.points,
-          answers: answers
+        this.players.forEach(player =>{
+          player.socket.emit("question", {
+            question: _this.currentQuestion.question,
+            category: _this.currentQuestion.category,
+            points: _this.currentQuestion.points,
+            answers: answers
+          })  
         });
         _this.players.forEach((player) => {
           player.socket.on('answer', _this.checkAnswer.bind(_this, player));
