@@ -39,7 +39,6 @@ class Game {
       else cb('No question returned')
     });
   }
-
   sendQuestion() {
     let _this = this;
     let playerList = this.players.map(player =>{
@@ -95,35 +94,39 @@ class Trivia extends SocketApp {
     this.io = io;
     this.games = []; // creates an empty array of game rooms
     this.gameId = 0; // creates a UUI for the game room
+    this.waiting = [];
     this.players = [] // creates an empty array of playes
   }
   onConnect(socket) {
     let _this = this;
     if (this.players.length < MAX_PLAYERS) {
       socket.on('signin', (username) => {
-        _this.players.push({
+        let player = {
           username: username,
           socket: socket,
           score: 0
-        })
-        let roomId = 'game-' + _this.gameId;
+        }
+        _this.players.push(player)
+        _this.waiting.push(player)
+        let roomId = 'game-' + _this.games.length
         socket.join(roomId, () => {
           socket.emit('waiting')
-          if (this.players.length === 1){
+          if (_this.waiting.length === 1){
             _this.startTimer = setTimeout(()=>{
               _this.games.push(new Game({
                 room: _this.server.in(roomId),
-                players: _this.players,
-              }))
+                players: _this.waiting,
+              }));
+              _this.waiting = [];
             },START_TIME)
           }
-          if (_this.players.length === MAX_PLAYERS) {
+          if (_this.waiting.length === MAX_PLAYERS) {
             clearTimeout(_this.startTimer);
             _this.games.push(new Game({
               room: _this.server.in(roomId),
-              players: _this.players,
+              players: _this.waiting,
             }))
-            _this.gameId++;
+            _this.waiting = [];
           }
         }) //makes a unique id for game
       })
