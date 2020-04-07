@@ -3,8 +3,6 @@ const axios = require('axios');
 const ShortUID = require('short-unique-id').default;
 
 const ANSWER_TIME = 10000; // 30 Seconds
-
-const START_TIME = 15000;
 const GET_READY_TIME = 2000;
 const MAX_PLAYERS = 1;
 /**
@@ -25,85 +23,39 @@ function shuffle(a) {
 const sleep = ms => (new Promise(resolve => (setTimeout(resolve, ms))));
 
 class Game {
-  constructor(room, onStopped) {
+  constructor(room) {
     console.log("starting new game");
-    this.questions = [];
-    this.questionNumber = 0;
     this.waitingPlayers = [];
     this.players = [];
     this.room = room;
-    this.answerTimer = null;
-    this.questionTimer = null;
-    this.answerCount = 0;
     this.isStarted = false;
   }
 
-  broadcast = (event, data) => this.players.forEach(player => this.sendTo(player, event, data));
-
-  sendTo = (player, event, data) => player.socket.emit(event, data);
+  broadcast = (event, data) => this.players.forEach(player => player.socket.emit(event, data));
 
   scoreList = () => this.players.map(player => ({ username: player.username, score: player.score }));
 
   sendScores = () => this.broadcast('scorelist', this.scoreList());
 
+  getQuestions = async (count) => {
+    let response = await axios.get(`https://opentdb.com/api.php?amount=${count}`);
+    if (!response.status === 200) return [];
+    let questions = response.data.results.map((questionData, index) => {
+      let question = {
+        ...questionData,
+        number: index + 1,
+        points: ['', 'easy', 'medium', 'hard'].indexOf(questionData.difficulty) * 5,
+        answers: shuffle([questionData.correct_answer].concat(questionData.incorrect_answers)),
+      }
+      return question;
+    });
+    return questions;
+  }
+
   //
   // Start a new question round
   //
-  startNewQuestion = async () => {
-
-    //
-    // Get a question from the API
-    //
-    const getNextQuestion =  () => {
-      return this.questions[this.questionNumber++] || null;
-
-    }
-
-    //
-    // Package and send a question to every player and listen for answers
-    //
-    const sendQuestion = async (questionData) => {
-
-      //
-      // Check if the given player answered correctly and send results
-      //
-      const checkAnswer = (player, answer) => {
-        // Increment answer count and remove player from waiting to answer list
-        this.answerCount++;
-        
-        // Remove answer listener for this player
-        player.socket.removeAllListeners('answer');
-
-        // Check if answer is correct and increment player score, send player result
-        if (answer === this.currentQuestion.correct_answer) {
-          player.score += this.currentQuestion.points;
-          this.sendTo(player, 'right', player.score);
-        } else this.sendTo(player, 'wrong', this.currentQuestion.correct_answer);
-
-        // If everyone has answered send scores and start a new question
-        if (this.answerCount >= this.players.length) {
-          console.log('Everyone has answered, clearing question timeout')
-          clearTimeout(this.questionTimer);
-          this.sendScores();
-          this.startNewQuestion();
-        }
-      }
-
-      // If we have a question to send, 
-      // - set points, 
-      // - shuffle the answers, 
-      // - send it to all players
-      // - listen for answers from each player
-      if (!questionData) return console.error('no question');
-      this.currentQuestion = questionData;
-      this.currentQuestion.points = ['', 'easy', 'medium', 'hard'].indexOf(this.currentQuestion.difficulty) * 5;
-      let answers = shuffle([this.currentQuestion.correct_answer].concat(this.currentQuestion.incorrect_answers));
-      let { question, category, points } = this.currentQuestion;
-      this.broadcast('question', { question, category, points, answers }, ANSWER_TIME);
-      this.questionTimer = setTimeout(this.startNewQuestion, ANSWER_TIME);
-
-      this.players.forEach(player => player.socket.on('answer', answer => checkAnswer(player, answer)));
-    }
+  startNewQuestion = async (questionData) => {
 
     // Clear any lingering answer listeners
     this.players.forEach(player => player.socket.removeAllListeners('answer'));
@@ -112,37 +64,80 @@ class Game {
     this.players = this.players.concat(this.waitingPlayers);
     this.waitingPlayers = [];
     this.sendScores();
-    //
-    // Notify players to get ready for the next question
-    // Wait for a period of time
-    // Send and process a question
-    this.answerCount = 0;
     this.broadcast('getready');
-    let question = getNextQuestion();
-    if (!question) this.stop();
     await sleep(GET_READY_TIME);
-    sendQuestion(question);
+    if (!questionData) return console.error('no question');
+    let { question, category, points, answers, number } = questionData;
+    console.log(`Sending question ${questionData.number}`)
+    this.broadcast('question', { question, category, points, answers, number }, ANSWER_TIME);
   }
 
+  //
+  // Create an async (Promise) function to wait for and check all
+  // answers from players (or timeouts)
+  //
+  // Resolve when either all players have answered, or timedout
+  //
+  checkAnswers = (question) => {
+    return new Promise(resolve => {
+      const checkPlayerAnswer = (player, answer) => {
+        // Increment answer count and remove player from waiting to answer list
+        answerCount++;
+
+        // Remove answer listener for this player
+        player.socket.removeAllListeners('answer');
+
+        // Check if answer is correct and increment player score, send player result
+        if (answer === question.correct_answer) {
+          player.score += question.points;
+          player.socket.emit('right', player.score);
+        } else player.socket.emit('wrong', question.correct_answer);
+
+        // If everyone has answered send scores and start a new question
+        if (answerCount >= this.players.length) {
+          console.log('Everyone has answered, clearing question timeout')
+          clearTimeout(questionTimer);
+          resolve();
+        }
+      }
+
+      let answerCount = 0;
+      let questionTimer = setTimeout(resolve, ANSWER_TIME); // ASet a timeout for anaswers
+      this.players.forEach(player => player.socket.on('answer', answer => checkPlayerAnswer(player, answer)));
+    })
+  }
+
+  //
+  // Main game loop:
+  //   set isStarted to true
+  //   Get all questions for the game
+  //   iterate through questions
+  //      send a question
+  //      wait for answers (or timeout)
+  //      send scores
+  //  Stop game when all questions have been sent
+  //
   async start() {
-    let response = await axios.get('https://opentdb.com/api.php?amount=20');
-    if (!response.status === 200) return null;
-    this.questions = response.data.results;
     this.isStarted = true;
-    this.startNewQuestion();
+    let questions = await this.getQuestions(5);
+    for (let question of questions) {
+      await this.startNewQuestion(question);
+      await this.checkAnswers(question);
+      this.sendScores();
+    }
+    this.stop();
   }
 
   stop() {
+    this.isStarted = false;
     console.log('Everyone left, stopping game');
     this.broadcast('game-over');
-    clearTimeout(this.answerTimer);
-    clearTimeout(this.questionTimer);
   }
 
   join(player) {
     this.broadcast('player-joined', { username: player.username });
     if (this.isStarted) {
-      this.sendTo(player, 'waiting');
+      player.socket.emit('waiting');
       this.waitingPlayers.push({ ...player, score: 0 });
     } else {
       this.players.push({ ...player, score: 0 });
@@ -150,6 +145,7 @@ class Game {
     }
 
 
+    // Handle a player leaving the game
     player.socket.on('disconnect', () => {
       let list = this.players;
       let index = list.findIndex(_player => (_player.id === player.id));
@@ -157,13 +153,9 @@ class Game {
         list = this.waitingPlayers;
         index = list.findIndex(_player => (_player.id === player.id));
       }
-
       if (index > -1) list.splice(index, 1);
-
-
       this.broadcast('player-left', { username: player.username });
       this.sendScores();
-
       if (this.players.length === 0) this.stop();
     })
   }
@@ -208,4 +200,5 @@ class Trivia extends SocketApp {
     socket.on('signin', joinGame(socket));
   }
 }
+
 module.exports = Trivia;
