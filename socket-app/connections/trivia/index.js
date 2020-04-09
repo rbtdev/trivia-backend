@@ -2,8 +2,8 @@ const SocketApp = require('../../socket-app');
 const axios = require('axios');
 const ShortUID = require('short-unique-id').default;
 
-const ANSWER_TIME = 10000; // 30 Seconds
-const GET_READY_TIME = 2000;
+const ANSWER_TIME = 30000; // 30 Seconds
+const GET_READY_TIME = 5000;
 const MAX_PLAYERS = 1;
 /**
  * Shuffles array in place.
@@ -57,9 +57,6 @@ class Game {
   //
   startNewQuestion = async (questionData) => {
 
-    // Clear any lingering answer listeners
-    this.players.forEach(player => player.socket.removeAllListeners('answer'));
-
     // If we have players waiting to get in, add them to the player list now
     this.players = this.players.concat(this.waitingPlayers);
     this.waitingPlayers = [];
@@ -81,8 +78,9 @@ class Game {
   checkAnswers = (question) => {
     return new Promise(resolve => {
       const checkPlayerAnswer = (player, answer) => {
-        // Increment answer count and remove player from waiting to answer list
-        answerCount++;
+        // remove player from waitingFor list
+        let index = waitingFor.findIndex(_player => (player.id === _player.id));
+        waitingFor.splice(index, 1);
 
         // Remove answer listener for this player
         player.socket.removeAllListeners('answer');
@@ -90,19 +88,24 @@ class Game {
         // Check if answer is correct and increment player score, send player result
         if (answer === question.correct_answer) {
           player.score += question.points;
-          player.socket.emit('right', player.score);
-        } else player.socket.emit('wrong', question.correct_answer);
+          player.socket.emit('right', question.points, answer);
+        } else player.socket.emit('wrong', question.correct_answer, answer);
 
         // If everyone has answered send scores and start a new question
-        if (answerCount >= this.players.length) {
+        if (waitingFor.length === 0) {
           console.log('Everyone has answered, clearing question timeout')
           clearTimeout(questionTimer);
           resolve();
         }
       }
 
-      let answerCount = 0;
-      let questionTimer = setTimeout(resolve, ANSWER_TIME); // ASet a timeout for anaswers
+      let waitingFor = [...this.players];
+      let questionTimer = setTimeout(() => {
+        // Clear any lingering answer listeners
+        waitingFor.forEach(player => player.socket.emit('wrong', question.correct_answer, ''));
+        waitingFor.forEach(player => player.socket.removeAllListeners('answer'));
+        resolve();
+      }, ANSWER_TIME); // ASet a timeout for anaswers
       this.players.forEach(player => player.socket.on('answer', answer => checkPlayerAnswer(player, answer)));
     })
   }
@@ -119,7 +122,7 @@ class Game {
   //
   async start() {
     this.isStarted = true;
-    let questions = await this.getQuestions(5);
+    let questions = await this.getQuestions(100);
     for (let question of questions) {
       await this.startNewQuestion(question);
       await this.checkAnswers(question);
